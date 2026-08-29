@@ -1,0 +1,235 @@
+name: Build & Pages
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one build+deploy at a time so the Pages site stays consistent.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # Gather all the package submodules inside the nested `list` submodule and
+  # stage their source metadata so the build matrix knows which packages to
+  # compile and the site knows what to list.
+  packages:
+    runs-on: ubuntu-latest
+    outputs:
+      names: ${{ steps.list.outputs.names }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - id: list
+        name: List packages
+        run: |
+          NAMES=$(ls -d list/*/ | sed 's|list/||; s|/||' | grep -v -E '^(\.github|\.git)$' | sort)
+          echo "names=$(printf '%s' "$NAMES" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: packages
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux
+            arch: x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            platform: linux
+            arch: arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows
+            arch: x86_64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            platform: windows
+            arch: arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            platform: macos
+            arch: x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-
+
+      - name: Install Linux arm64 cross-linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build packages
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          set -euo pipefail
+          NAMES="${{ needs.packages.outputs.names }}"
+          mkdir -p stage
+          for name in $(echo "$NAMES" | jq -r '.[]'); do
+            echo "Building $name for ${{ matrix.target }}"
+            (cd "list/$name" && cargo build --release --target "${{ matrix.target }}")
+            ext=""
+            if [ "${{ matrix.platform }}" = "windows" ]; then ext=".exe"; fi
+            bin="list/$name/target/${{ matrix.target }}/release/$name$ext"
+            if [ -f "$bin" ]; then
+              cp "$bin" "stage/$name-${{ matrix.arch }}-${{ matrix.platform }}$ext"
+            else
+              echo "::error:: no binary produced for $name"
+              exit 1
+            fi
+          done
+
+      - name: Install UPX (non-windows)
+        if: matrix.platform != 'windows'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y upx || true
+          else
+            brew install upx || true
+          fi
+
+      - name: Compress binaries with UPX
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          for f in stage/*; do
+            [ -f "$f" ] || continue
+            chmod +x "$f"
+            upx --best "$f" || upx --lzma "$f" || true
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.arch }}
+          path: stage/*
+          if-no-files-found: error
+
+  # Generate the GitHub Pages index from the built package metadata and upload
+  # the consolidated site for deployment.
+  site:
+    name: Generate Pages site
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Collect metadata
+        run: |
+          mkdir -p site/pkg
+          for d in list/*/; do
+            pkgdir="${d%/}"
+            case "$pkgdir" in */.github|*/.git) continue ;; esac
+            if [ -d "$pkgdir/pkg" ]; then
+              cp "$pkgdir"/pkg/*.toml site/pkg/ 2>/dev/null || true
+            fi
+          done
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: site/bin
+          merge-multiple: true
+
+      - name: Generate index.html
+        shell: bash
+        run: |
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>pkgxeo — packages</title>
+            <style>
+              body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 56rem; padding: 0 1rem; line-height: 1.5; color: #222; }
+              h1 { border-bottom: 2px solid #eee; padding-bottom: .5rem; }
+              table { border-collapse: collapse; width: 100%; }
+              th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #eee; }
+              th { background: #f6f6f6; }
+              a { color: #0366d6; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+              .note { color: #666; font-size: .9rem; margin-top: 2rem; }
+            </style>
+          </head>
+          <body>
+            <h1>pkgxeo packages</h1>
+            <p>Prebuilt binaries for every <code>pkgxeo</code> package, compiled for x86_64 and arm64 on Linux, Windows, and macOS.</p>
+            <table>
+              <thead><tr><th>Package</th><th>File</th></tr></thead>
+              <tbody>
+          HTML
+
+          cd site/bin
+          for f in *; do
+            [ -f "$f" ] || continue
+            pkg="${f%-*}"
+            printf '              <tr><td>%s</td><td><a href="bin/%s">%s</a></td></tr>\n' "$pkg" "$f" "$f"
+          done >> ../index.html
+          cd ..
+
+          da=$(date -u)
+          cat >> index.html <<HTML
+              </tbody>
+            </table>
+            <p class="note">Built at ${da} UTC by GitHub Actions from <a href="https://github.com/pkgxeo/repo">pkgxeo/repo</a>.</p>
+          </body>
+          </html>
+          HTML
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,8 +1,0 @@
--- printc: colored output library for .xeo
--- usage:  use printc
--- then:   printc "{green}foo{clear}"
-coreadd printc
-func printc $text
-    extc printc $text
-    print $res
-end

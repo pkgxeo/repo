@@ -1,6 +1,0 @@
-name = "printc"
-version = "0.1.0"
-description = "ANSI color printing for .xeo"
-depends = []
-lib = ["printc.xeo"]
-bin = ["printc"]
