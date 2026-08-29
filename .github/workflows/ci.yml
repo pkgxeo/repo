@@ -18,27 +18,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Gather all the package submodules inside the nested `list` submodule and
-  # stage their source metadata so the build matrix knows which packages to
-  # compile and the site knows what to list.
-  packages:
-    runs-on: ubuntu-latest
-    outputs:
-      names: ${{ steps.list.outputs.names }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - id: list
-        name: List packages
-        run: |
-          NAMES=$(ls -d list/*/ | sed 's|list/||; s|/||' | grep -v -E '^(\.github|\.git)$' | sort)
-          echo "names=$(printf '%s' "$NAMES" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
-
+  # Build every package submodule inside the nested `list` submodule for each
+  # target, upload each platform/arch as an artifact.
   build:
     name: Build (${{ matrix.target }})
-    needs: packages
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -70,7 +53,7 @@ jobs:
             arch: arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -80,7 +63,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -101,9 +84,14 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
           set -euo pipefail
-          NAMES="${{ needs.packages.outputs.names }}"
+          # list the package dirs inside the `list` submodule (exclude non-packages)
+          NAMES=$(ls -d list/*/ | sed 's|list/||; s|/||' | grep -v -E '^(\.github|\.git)$' | sort)
+          if [ -z "$NAMES" ]; then
+            echo "::error:: no package directories found in list/"
+            exit 1
+          fi
           mkdir -p stage
-          for name in $(echo "$NAMES" | jq -r '.[]'); do
+          for name in $NAMES; do
             echo "Building $name for ${{ matrix.target }}"
             (cd "list/$name" && cargo build --release --target "${{ matrix.target }}")
             ext=""
@@ -137,7 +125,7 @@ jobs:
           done
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
           path: stage/*
@@ -150,7 +138,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -166,7 +154,7 @@ jobs:
           done
 
       - name: Download all binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: site/bin
           merge-multiple: true
@@ -218,7 +206,7 @@ jobs:
           HTML
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
@@ -232,4 +220,4 @@ jobs:
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
