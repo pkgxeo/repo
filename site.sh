@@ -96,7 +96,16 @@ for name in "${PACKAGES[@]}"; do
   DESC["$name"]="$desc"
   VER["$name"]="$ver"
   copy_lib "$pkg_dir" "$name"
+  [ -f "$toml" ] && cp "$toml" "$OUT_DIR/pkg/$name.toml"
 done
+
+# publish a catalog (pkg/repo.db) so plain-http xeon endpoints can
+# discover the package manifests without directory listing.
+{
+  for name in "${PACKAGES[@]}"; do
+    [ -f "$OUT_DIR/pkg/$name.toml" ] && echo "$name.toml"
+  done
+} > "$OUT_DIR/pkg/repo.db"
 
 # home page
 html_head "pkgxeo packages" > "$OUT_DIR/index.html"
