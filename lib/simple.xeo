@@ -1,0 +1,3 @@
+func greet $n
+  print "hello " $n
+end
