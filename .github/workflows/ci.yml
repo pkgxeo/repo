@@ -159,51 +159,10 @@ jobs:
           path: site/bin
           merge-multiple: true
 
-      - name: Generate index.html
+      - name: Generate multi-page site
         shell: bash
         run: |
-          cat > site/index.html <<'HTML'
-          <!doctype html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>pkgxeo — packages</title>
-            <style>
-              body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 56rem; padding: 0 1rem; line-height: 1.5; color: #222; }
-              h1 { border-bottom: 2px solid #eee; padding-bottom: .5rem; }
-              table { border-collapse: collapse; width: 100%; }
-              th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #eee; }
-              th { background: #f6f6f6; }
-              a { color: #0366d6; text-decoration: none; }
-              a:hover { text-decoration: underline; }
-              .note { color: #666; font-size: .9rem; margin-top: 2rem; }
-            </style>
-          </head>
-          <body>
-            <h1>pkgxeo packages</h1>
-            <p>Prebuilt binaries for every <code>pkgxeo</code> package, compiled for x86_64 and arm64 on Linux, Windows, and macOS.</p>
-            <table>
-              <thead><tr><th>Package</th><th>File</th></tr></thead>
-              <tbody>
-          HTML
-
-          cd site/bin
-          for f in *; do
-            [ -f "$f" ] || continue
-            pkg="${f%-*}"
-            printf '              <tr><td>%s</td><td><a href="bin/%s">%s</a></td></tr>\n' "$pkg" "$f" "$f"
-          done >> ../index.html
-          cd ..
-
-          da=$(date -u)
-          cat >> index.html <<HTML
-              </tbody>
-            </table>
-            <p class="note">Built at ${da} UTC by GitHub Actions from <a href="https://github.com/pkgxeo/repo">pkgxeo/repo</a>.</p>
-          </body>
-          </html>
-          HTML
+          bash ./site.sh list site
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
