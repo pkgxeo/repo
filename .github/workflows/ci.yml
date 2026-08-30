@@ -57,10 +57,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install nightly Rust (build-std)
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
+          components: rust-src
 
       - name: Cache cargo registry
         uses: actions/cache@v5
